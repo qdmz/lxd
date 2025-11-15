@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统状态检查 - LXC容器管理</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .status-active {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status-inactive {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .status-unknown {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .info-card {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-number {
+            font-size: 24px;
+            font-weight: bold;
+            color: #3498db;
+        }
+        .stat-label {
+            font-size: 14px;
+            color: #6c757d;
+        }
+        .service-status {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .service-active {
+            background-color: #28a745;
+        }
+        .service-inactive {
+            background-color: #dc3545;
+        }
+        .service-unknown {
+            background-color: #ffc107;
+        }
+        .command-output {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .progress-thin {
+            height: 8px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="{{ url_for('containers') }}">LXC容器管理</a>
+            <div class="navbar-nav ms-auto">
+                {% if session.username %}
+                    <span class="navbar-text user-badge me-3">
+                        <i class="fas fa-user me-1"></i>{{ session.username }} ({{ user_role }})
+                    </span>
+                    <a class="nav-link" href="{{ url_for('logout') }}">退出</a>
+                {% else %}
+                    <a class="nav-link" href="{{ url_for('login') }}">登录</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2><i class="fas fa-server me-2"></i>系统状态检查</h2>
+            <a href="{{ url_for('containers') }}" class="btn btn-outline-primary">
+                <i class="fas fa-arrow-left me-1"></i>返回容器列表
+            </a>
+        </div>
+
+        <!-- 系统概览 -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="info-card text-center">
+                    <div class="stat-number">{{ container_stats.total }}</div>
+                    <div class="stat-label">总容器数</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="info-card text-center">
+                    <div class="stat-number text-success">{{ container_stats.running }}</div>
+                    <div class="stat-label">运行中</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="info-card text-center">
+                    <div class="stat-number text-warning">{{ container_stats.stopped }}</div>
+                    <div class="stat-label">已停止</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="info-card text-center">
+                    <div class="stat-number text-danger">{{ container_stats.error }}</div>
+                    <div class="stat-label">错误状态</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- LXD服务状态 -->
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-cube me-2"></i>LXD服务状态
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        {% if lxd_service_status.success and lxd_service_status.output and lxd_service_status.output[0] == 'active' %}
+                            <div class="alert alert-success">
+                                <span class="service-status service-active"></span>
+                                <strong>LXD服务运行正常</strong>
+                                {% if lxd_version.success and lxd_version.output %}
+                                    <br><small>版本: {{ lxd_version.output[0] if lxd_version.output else '未知' }}</small>
+                                {% endif %}
+                            </div>
+                            
+                            {% if lxd_service_info.success and lxd_service_info.output %}
+                                <h6>服务状态详情:</h6>
+                                <div class="command-output">
+                                    {% for line in lxd_service_info.output %}
+                                        {{ line }}<br>
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        {% else %}
+                            <div class="alert alert-danger">
+                                <span class="service-status service-inactive"></span>
+                                <strong>LXD服务未运行</strong>
+                            </div>
+                            <p>LXD服务可能未启动或配置不正确。请检查:</p>
+                            <ul>
+                                <li>LXD服务状态: <code>sudo systemctl status snap.lxd.daemon</code></li>
+                                <li>启动LXD服务: <code>sudo systemctl start snap.lxd.daemon</code></li>
+                                <li>初始化LXD: <code>sudo lxd init</code></li>
+                            </ul>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- 存储池状态 -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-database me-2"></i>存储池 ({{ storage_pools|length }})
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        {% if storage_pools %}
+                            {% for pool in storage_pools %}
+                                <div class="mb-3 p-3 border rounded">
+                                    <h6 class="mb-2">{{ pool.name }}</h6>
+                                    <div class="row">
+                                        <div class="col-6">
+                                            <small class="text-muted">驱动: {{ pool.driver }}</small>
+                                        </div>
+                                        <div class="col-6 text-end">
+                                            <small class="text-muted">已使用: {{ pool.used_by|length }} 个容器</small>
+                                        </div>
+                                    </div>
+                                    {% if pool.config %}
+                                        <div class="mt-2">
+                                            <small class="text-muted">配置:</small>
+                                            {% for key, value in pool.config.items() %}
+                                                <br><small>{{ key }}: {{ value }}</small>
+                                            {% endfor %}
+                                        </div>
+                                    {% endif %}
+                                </div>
+                            {% endfor %}
+                        {% else %}
+                            <div class="alert alert-warning">
+                                <i class="fas fa-exclamation-triangle me-2"></i>未找到存储池
+                            </div>
+                            <p>这可能是因为LXD未正确初始化。请尝试:</p>
+                            <ol>
+                                <li>运行 <code>sudo lxd init</code> 命令初始化LXD</li>
+                                <li>创建默认存储池: <code>lxc storage create default dir</code></li>
+                            </ol>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <!-- 网络配置 -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-network-wired me-2"></i>网络配置 ({{ networks|length }})
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        {% if networks %}
+                            {% for network in networks %}
+                                <div class="mb-3 p-3 border rounded">
+                                    <h6 class="mb-2">{{ network.name }}</h6>
+                                    <div class="row">
+                                        <div class="col-6">
+                                            <small class="text-muted">类型: {{ network.type }}</small>
+                                        </div>
+                                        <div class="col-6 text-end">
+                                            {% if network.managed %}
+                                                <span class="badge bg-success">托管</span>
+                                            {% else %}
+                                                <span class="badge bg-warning">非托管</span>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    {% if network.config %}
+                                        <div class="mt-2">
+                                            <small class="text-muted">配置:</small>
+                                            {% for key, value in network.config.items() %}
+                                                <br><small>{{ key }}: {{ value }}</small>
+                                            {% endfor %}
+                                        </div>
+                                    {% endif %}
+                                </div>
+                            {% endfor %}
+                        {% else %}
+                            <div class="alert alert-warning">
+                                <i class="fas fa-exclamation-triangle me-2"></i>未找到网络配置
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- 系统信息 -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-info-circle me-2"></i>系统信息
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-6">
+                                <strong>主机名:</strong><br>
+                                {{ system_info.hostname }}
+                            </div>
+                            <div class="col-6">
+                                <strong>运行时间:</strong><br>
+                                {{ system_info.uptime }}
+                            </div>
+                        </div>
+                        <div class="row mt-2">
+                            <div class="col-12">
+                                <strong>负载平均值:</strong><br>
+                                {{ system_info.load_average }}
+                            </div>
+                        </div>
+                        
+                        {% if system_info.memory_usage %}
+                            <div class="mt-3">
+                                <strong>内存使用:</strong>
+                                <div class="command-output">
+                                    {% for line in system_info.memory_usage %}
+                                        {{ line }}<br>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% endif %}
+                        
+                        {% if system_info.disk_usage %}
+                            <div class="mt-3">
+                                <strong>磁盘使用:</strong>
+                                <div class="command-output">
+                                    {% for line in system_info.disk_usage %}
+                                        {{ line }}<br>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- 服务状态 -->
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-cogs me-2"></i>服务状态
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>服务</th>
+                                    <th>状态</th>
+                                    <th>描述</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>LXD</td>
+                                    <td>
+                                        {% if lxd_service_status.success and lxd_service_status.output and lxd_service_status.output[0] == 'active' %}
+                                            <span class="service-status service-active"></span>运行中
+                                        {% else %}
+                                            <span class="service-status service-inactive"></span>停止
+                                        {% endif %}
+                                    </td>
+                                    <td>容器管理服务</td>
+                                </tr>
+                                <tr>
+                                    <td>AppArmor</td>
+                                    <td>
+                                        {% if services_status.apparmor.success and services_status.apparmor.output and services_status.apparmor.output[0] == 'active' %}
+                                            <span class="service-status service-active"></span>运行中
+                                        {% else %}
+                                            <span class="service-status service-inactive"></span>停止
+                                        {% endif %}
+                                    </td>
+                                    <td>安全模块</td>
+                                </tr>
+                                <tr>
+                                    <td>UFW</td>
+                                    <td>
+                                        {% if services_status.ufw.success and services_status.ufw.output and services_status.ufw.output[0] == 'active' %}
+                                            <span class="service-status service-active"></span>运行中
+                                        {% else %}
+                                            <span class="service-status service-inactive"></span>停止
+                                        {% endif %}
+                                    </td>
+                                    <td>防火墙</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 备份状态 -->
+            <div class="col-md-6">
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-archive me-2"></i>备份状态
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <strong>备份目录:</strong> {{ config['backup_path'] }}
+                        </div>
+                        <div class="mb-3">
+                            <strong>状态:</strong>
+                            {% if backup_status.exists %}
+                                {% if backup_status.writable %}
+                                    <span class="badge bg-success">可读写</span>
+                                {% else %}
+                                    <span class="badge bg-warning">只读</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="badge bg-danger">不存在</span>
+                            {% endif %}
+                        </div>
+                        <div class="mb-3">
+                            <strong>备份大小:</strong>
+                            {% if backup_status.size > 0 %}
+                                {{ "%.2f"|format(backup_status.size / 1024 / 1024) }} MB
+                            {% else %}
+                                0 MB
+                            {% endif %}
+                        </div>
+                        {% if not backup_status.exists %}
+                            <div class="alert alert-warning">
+                                <i class="fas fa-exclamation-triangle me-2"></i>备份目录不存在，将自动创建
+                            </div>
+                        {% elif not backup_status.writable %}
+                            <div class="alert alert-danger">
+                                <i class="fas fa-exclamation-circle me-2"></i>备份目录不可写，请检查权限
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 故障排除 -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">故障排除</h5>
+            </div>
+            <div class="card-body">
+                <h6>常见问题解决方案：</h6>
+                <ol>
+                    <li><strong>LXD服务未运行</strong>：
+                        <p>运行以下命令启动LXD服务：</p>
+                        <pre>sudo systemctl start snap.lxd.daemon
+sudo systemctl enable snap.lxd.daemon</pre>
+                    </li>
+                    <li><strong>LXD未初始化</strong>：
+                        <p>运行以下命令初始化LXD：</p>
+                        <pre>sudo lxd init --auto</pre>
+                    </li>
+                    <li><strong>缺少存储池</strong>：
+                        <p>运行以下命令创建默认存储池：</p>
+                        <pre>lxc storage create default dir
+lxc profile device add default root disk path=/ pool=default</pre>
+                    </li>
+                    <li><strong>权限问题</strong>：
+                        <p>确保Web服务器用户在lxd组中：</p>
+                        <pre>sudo usermod -a -G lxd www-data
+sudo systemctl restart apache2</pre>
+                    </li>
+                </ol>
+                
+                <div class="text-center mt-4">
+                    <a href="{{ url_for('containers') }}" class="btn btn-outline-primary">
+                        <i class="fas fa-arrow-left me-1"></i>返回容器列表
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
